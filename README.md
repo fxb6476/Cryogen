@@ -1,5 +1,7 @@
 # Cryogen
 A python script for showing differences between binary files.
+To get started clone this repository into a Ubuntu virtual machine.
+Execute the following script ``` ubuntu_dep_install.sh ```
 
 ### Features
 1. Diff multiple img signatures.
