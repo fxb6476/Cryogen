@@ -6,9 +6,14 @@ import binwalk
 import pprint
 import hashlib
 import os
+import sys
+import glob
+import itertools
+import shutil
+
 pp  = pprint.PrettyPrinter(indent=2, width=130)
 
-def check_directory_files(imgs, index, module):
+def check_directory_files(img_name, module):
 	md5sums = []
 	paths = []
 	results = module.results
@@ -17,7 +22,7 @@ def check_directory_files(imgs, index, module):
 	for result in results:
 
 		# Looking for files that pertain to this image...
-		if imgs[index] in result.file.path:
+		if img_name in result.file.path:
 			
 			# Moving through results...
 			if result.file.path in module.extractor.output:
@@ -62,14 +67,14 @@ def check_directory_files(imgs, index, module):
 											paths.append(stripped_path)
 	return md5sums, paths
 
-def carv2set_md5(imgs, index, module):
+def carv2set_md5(img_name, module):
 	md5s = []
 	carvs = []
 	results = module.results
 
 	for result in results:
 
-		if imgs[index] in result.file.path:
+		if img_name in result.file.path:
 
 			if result.file.path in module.extractor.output:
 
@@ -89,105 +94,131 @@ def carv2set_md5(imgs, index, module):
 
 	return md5s, carvs
 
-def diff_carvs(imgs, module):
+def diff_carvs(img1, img2, module):
 
 	results = module.results
-	sum1, carv1 = carv2set_md5(imgs, 0, module)
+	sum1, carv1 = carv2set_md5(img1, module)
 
 	dic1 = {carv1[x]: sum1[x] for x in range(len(sum1))}
 
-	print("[+]                                      ------------ Checking md5sums of carved files! ------------")
-	for index in range(1, len(imgs)):
-		common_carvs_diff_md5 = []
+	common_carvs_diff_md5 = []
 
-		print("[+] ------ Common Carvs with different md5sums img1 -> img" + str(index+1) +" ------")
+	print("[+] ------ Comparing binwalk carv's. ------")
 
-		sum_t, carv_t = carv2set_md5(imgs, index, module)
+	print("[+] ------ Shared carvs with different md5sums. ------")
 
-		dic_t = {carv_t[x]: sum_t[x] for x in range(len(sum_t))}
-	
-		common_carvs_diff_md5 = []
+	sum_t, carv_t = carv2set_md5(img2, module)
 
-		# Now we will get only the intersection of common files that have different hashes...
-		for com_carv in list( set(dic1).intersection(set(dic_t)) ):
+	dic_t = {carv_t[x]: sum_t[x] for x in range(len(sum_t))}
 
-			if dic1[com_carv] != dic_t[com_carv]:
+	common_carvs_diff_md5 = []
 
-				common_carvs_diff_md5.append([dic1[com_carv], dic_t[com_carv], com_carv])
+	# Now we will get only the intersection of common files that have different hashes...
+	for com_carv in list( set(dic1).intersection(set(dic_t)) ):
 
-		pp.pprint(common_carvs_diff_md5)
+		if dic1[com_carv] != dic_t[com_carv]:
 
-		if args.spec:
+			common_carvs_diff_md5.append([dic1[com_carv], dic_t[com_carv], com_carv])
 
-			print("[+] ------ Carvs that are only in img1 or img" + str(index+1) +" ------")
-			img1_carvs = list(set(carv1).difference(set(carv_t)))
-			img2_carvs = list(set(carv_t).difference(set(carv1)))
-			diff_carvs = []
-			for carv in img1_carvs:
-				diff_carvs.append(['1', carv])
+	pp.pprint(common_carvs_diff_md5)
 
-			for carv in img2_carvs:
-				diff_carvs.append(['2', carv])
+	if args.spec:
 
-			pp.pprint(diff_carvs)
+		print("[+] ------ Carvs that are only in img1 or img2 ------")
+		img1_carvs = list(set(carv1).difference(set(carv_t)))
+		img2_carvs = list(set(carv_t).difference(set(carv1)))
+		diff_carvs = []
+		for carv in img1_carvs:
+			diff_carvs.append(['1', carv])
+
+		for carv in img2_carvs:
+			diff_carvs.append(['2', carv])
+
+		pp.pprint(diff_carvs)
 		
 		
-def diff_root_fs(imgs, module):
+def diff_root_fs(img1, img2, module):
 
 	results = module.results
-	file_sum1, file_path1 = check_directory_files(imgs, 0, module)
+	file_sum1, file_path1 = check_directory_files(img1, module)
 
-	print("[+]                                      ------------ Checking md5sum of rfs files! ------------")
-	for index in range(1, len(imgs)):
+	common_path_diff_md5 = []
+	print("[+] ------ Comparing root-file systems. ------")
+	print("[+] ------ Shared files with different md5sums. ------")
 
-		common_path_diff_md5 = []
+	file_sum_t, file_path_t = check_directory_files(img2, module)
 
-		print("[+] ------ Common Files with different md5sums img1 -> img" + str(index+1) +" ------")
+	# Now we will get only the intersection of common files that have different hashes...
+	common_paths = set(file_path1).intersection(set(file_path_t))
 
-		file_sum_t, file_path_t = check_directory_files(imgs, index, module)
+	for path in list(common_paths):
 
-		# Now we will get only the intersection of common files that have different hashes...
-		common_paths = set(file_path1).intersection(set(file_path_t))
+		sum_index1 = file_path1.index(path)
+		sum_index2 = file_path_t.index(path)
 
-		for path in list(common_paths):
+		# Checking if common files have the same md5 sum, if they don't append them to final list...
+		# Also filter out 'lib' files, they usually change due to updates!
+		if (file_sum1[sum_index1] not in file_sum_t[sum_index2]) and ('/lib/' not in path):
 
-			sum_index1 = file_path1.index(path)
-			sum_index2 = file_path_t.index(path)
+			common_path_diff_md5.append([file_sum1[sum_index1], file_sum_t[sum_index2], path])
 
-			# Checking if common files have the same md5 sum, if they don't append them to final list...
-			# Also filter out 'lib' files, they usually change due to updates!
-			if (file_sum1[sum_index1] not in file_sum_t[sum_index2]) and ('/lib/' not in path):
-
-				common_path_diff_md5.append([file_sum1[sum_index1], file_sum_t[sum_index2], path])
-
-		pp.pprint(common_path_diff_md5)
+	pp.pprint(common_path_diff_md5)
 
 
-parser = argparse.ArgumentParser(description='Pass an image and list of images to compare your image with.')
-parser.add_argument('--img', required=True, type=str, help="Image you are analyzing.")
-parser.add_argument('--img_lst', required=True, type=str, help="List of images you would like to analyze against")
-parser.add_argument('--spec', dest='spec', action='store_true', help='Show carvs specific to each image.')
+parser = argparse.ArgumentParser(description='Place all the images you want to compare in the imgs folder! Then run the script!')
+parser.add_argument('--img', type=str, help="Specify image you would like to analyze against.")
+parser.add_argument('--verbose-carvs', dest='spec', action='store_true', help='Show uncommon carvs.')
+parser.add_argument('--clean-up', dest='wipe', action='store_true', help='Clean up extracted directories.')
+parser.set_defaults(wipe=False)
 parser.set_defaults(spec=False)
 
 args = parser.parse_args()
 
-img_lst = [args.img]
+# Grabbing images from imgs directory...
+images = glob.glob(os.getcwd() + '/imgs/*')
+images = [f for f in images if os.path.isfile(f)]
 
-# Append all images into a huge list!
-# Always make sure the image you are analyzing is the first in the list.
-for line in open(args.img_lst):
-	line = line.rstrip('\n') 
-	img_lst.append(line)
+combs = []
 
-for module in binwalk.scan(*img_lst, signature=True, quiet=True, extract=True):
-	results = module.results
+if args.img is None:
 
-	print("[+]                                      ------------ Analyzing the following images ------------")
-	pp.pprint(img_lst)
+	# Get all combinations of analysis of the images in the directory.
+	for comb in itertools.combinations(images, 2):
+		combs.append(comb)
+
+# Checking if file passed even exists...
+elif os.path.isfile(args.img):
+
+	# We will just compare all the images with the given one.
+	for image in images:
+		combs.append((args.img, image))
+
+	# Adding user supplied image to the list of images to be extracted.
+	images.append(args.img)
+
+else:
+	print("[+] - Image passed does not exist! Try again...")
+	sys.exit()
+
+
+print("[+] ------------ Analyzing these images ------------")
+pp.pprint(images)
+print("")
+
+module = binwalk.scan(*images, signature=True, quiet=True, extract=True)
+
+for img1, img2 in combs:
+
+	print("[+] - Comparing the folowing images...")
+	print("[+] -> img1 = " + img1)
+	print("[+] -> img2 = " + img2)
+	
+	diff_carvs(img1, img2, module[0])
 	print("")
 
-	diff_carvs(img_lst, module)
-	print("")
+	diff_root_fs(img1, img2, module[0])
+	print("____________________________________________________________________________________________")
 
-	diff_root_fs(img_lst, module)
-	print("")
+if args.wipe:
+	for dir in glob.glob(os.getcwd() + '/imgs/_*'):
+  		shutil.rmtree(dir)
