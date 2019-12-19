@@ -1,5 +1,5 @@
-# firmware-diff
-A python script for listing differences between two firmware images.
+# Cryogen
+A python script for showing differences between binary files.
 
 ### Features
 1. Diff multiple img signatures.
