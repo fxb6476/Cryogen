@@ -11,6 +11,7 @@
 | --more-files | Show particular files. |
 | --clean-up | Clean up extracted directories. |
 | --rfs-filters FSFILTER [FSFILTER ...] | Only output files whos paths match these strings. |
+| --output | Save everything you print to the screen to a json file. |
 
 1. Uses binwalk to perform signature analysis of binary files.
 2. Validate md5 checksums of carved files.

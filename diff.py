@@ -10,6 +10,7 @@ import sys
 import glob
 import itertools
 import shutil
+import json
 
 pp  = pprint.PrettyPrinter(indent=2, width=130)
 
@@ -91,8 +92,6 @@ def diff_carvs(img1, img2, module):
 
 	dic1 = {carv1[x]: sum1[x] for x in range(len(sum1))}
 
-	common_carvs_diff_md5 = []
-
 	print("[+] ------ Comparing binwalk carv's. ------")
 
 	print("[+] ------ Shared carvs with different md5sums. ------")
@@ -101,30 +100,35 @@ def diff_carvs(img1, img2, module):
 
 	dic_t = {carv_t[x]: sum_t[x] for x in range(len(sum_t))}
 
-	common_carvs_diff_md5 = []
+
+	carv_data = {}
+	carv_data['shared_carvs'] = {}
+	carv_data['unique_carvs'] = {}
 
 	# Now we will get only the intersection of common files that have different hashes...
 	for com_carv in list( set(dic1).intersection(set(dic_t)) ):
 
 		if dic1[com_carv] != dic_t[com_carv]:
 
-			common_carvs_diff_md5.append([dic1[com_carv], dic_t[com_carv], com_carv])
+			carv_data['shared_carvs'][com_carv] = (dic1[com_carv], dic_t[com_carv])
 
-	pp.pprint(common_carvs_diff_md5)
+	pp.pprint(carv_data['shared_carvs'])
 
 	if args.more_carvs:
 
 		print("[+] ------ Carvs that are only in img1 or img2 ------")
 		img1_carvs = list(set(carv1).difference(set(carv_t)))
 		img2_carvs = list(set(carv_t).difference(set(carv1)))
-		diff_carvs = []
+
 		for carv in img1_carvs:
-			diff_carvs.append(['1', carv])
+			carv_data['unique_carvs'][carv] = '1'
 
 		for carv in img2_carvs:
-			diff_carvs.append(['2', carv])
+			carv_data['unique_carvs'][carv] = '2'
 
-		pp.pprint(diff_carvs)
+		pp.pprint(carv_data['unique_carvs'])
+	
+	return carv_data
 		
 		
 def diff_root_fs(img1, img2, module):
@@ -142,6 +146,10 @@ def diff_root_fs(img1, img2, module):
 
 	dic_t = {file_path_t[x]: file_sum_t[x] for x in range(len(file_sum_t))}
 
+	rfs_data = {}
+	rfs_data['shared_files'] = {}
+	rfs_data['unique_files'] = {}
+
 	# Now we will get only the intersection of common files that have different hashes...
 	for com_path in set(dic1).intersection(set(dic_t)):
 
@@ -155,23 +163,25 @@ def diff_root_fs(img1, img2, module):
 
 		if (dic1[com_path] != dic_t[com_path]) and any(fil in com_path for fil in filters):
 
-			common_path_diff_md5.append([dic1[com_path], dic_t[com_path], com_path])
+			rfs_data['shared_files'][com_path] = (dic1[com_path], dic_t[com_path])
 
-	pp.pprint(common_path_diff_md5)
+	pp.pprint(rfs_data['shared_files'])
 
 	if args.more_files:
 
 		print("[+] ------ Files that are only in img1 or img2 ------")
 		img1_paths = list(set(file_path1).difference(set(file_path_t)))
 		img2_paths = list(set(file_path_t).difference(set(file_path1)))
-		diff_paths = []
+
 		for path in img1_paths:
-			diff_paths.append(['1', path])
+			rfs_data['unique_files'][path] = '1'
 
 		for path in img2_paths:
-			diff_paths.append(['2', path])
+			rfs_data['unique_files'][path] = '2'
 
-		pp.pprint(diff_paths)
+		pp.pprint(rfs_data['unique_files'])
+
+	return rfs_data
 
 # Main program!!!
 
@@ -182,6 +192,7 @@ parser.add_argument('--more-carvs', dest='more_carvs', action='store_true', help
 parser.add_argument('--more-files', dest='more_files', action='store_true', help='Show particular files.')
 parser.add_argument('--clean-up', dest='wipe', action='store_true', help='Clean up extracted directories.')
 parser.add_argument('--rfs-filters', nargs='+', dest='fsfilter', help="Only output files whos paths match these strings.")
+parser.add_argument('--output', type=str, help="Save everything you print to the screen to a json file.")
 parser.set_defaults(wipe=False)
 parser.set_defaults(more_carvs=False)
 parser.set_defaults(more_files=False)
@@ -192,7 +203,9 @@ args = parser.parse_args()
 images = glob.glob(os.getcwd() + '/imgs/*')
 images = [f for f in images if os.path.isfile(f)]
 
+# Some globals...
 combs = []
+json_data = {}
 
 if args.img is None:
 
@@ -224,17 +237,29 @@ print("")
 
 module = binwalk.scan(*images, signature=True, quiet=True, extract=True)
 
+count = 1
 for img1, img2 in combs:
 
 	print("[+] - Comparing the folowing images...")
 	print("[+] -> img1 = " + img1)
 	print("[+] -> img2 = " + img2)
+
+	json_data['comp' + str(count)] = {}
+	json_data['comp' + str(count)]['img1'] = img1
+	json_data['comp' + str(count)]['img2'] = img2
 	
-	diff_carvs(img1, img2, module[0])
+	json_data['comp' + str(count)]['carv_data'] = diff_carvs(img1, img2, module[0])
 	print("")
 
-	diff_root_fs(img1, img2, module[0])
+	json_data['comp' + str(count)]['rfs_data'] = diff_root_fs(img1, img2, module[0])
 	print("____________________________________________________________________________________________")
+	count = count + 1
+
+if args.output is not None:
+	out = open(args.output, "w+")
+	print("[+] - Writing data to disk!")
+	out.write(json.dumps(json_data, indent=4, sort_keys=True))
+	out.close()
 
 if args.wipe:
 	for dir in glob.glob(os.getcwd() + '/imgs/_*'):
