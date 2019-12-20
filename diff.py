@@ -45,26 +45,16 @@ def check_directory_files(img_name, module):
 
 									full_path = os.path.join(root, name)
 
-									# Need to fix issue when files are actually symbolic links. Just check if file exists.
-									# Also skipping files that symlink to busybox!
+									# Need to fix issue when files are actually symbolic links that don't exist. 
+									# Just check if file exists.
 									if os.path.isfile(full_path):
 
-										if os.path.islink(full_path):
+										md5_sum = hashlib.md5( open(full_path, 'rb').read() ).hexdigest()
 
-											if 'busybox' not in os.readlink(full_path): 
-												md5_sum = hashlib.md5( open(full_path, 'rb').read() ).hexdigest()
+										stripped_path = full_path[full_path.rfind(directory):]
 
-												stripped_path = full_path[full_path.rfind(directory):]
-
-												md5sums.append(md5_sum)
-												paths.append(stripped_path)
-										else:
-											md5_sum = hashlib.md5( open(full_path, 'rb').read() ).hexdigest()
-
-											stripped_path = full_path[full_path.rfind(directory):]
-
-											md5sums.append(md5_sum)
-											paths.append(stripped_path)
+										md5sums.append(md5_sum)
+										paths.append(stripped_path)
 	return md5sums, paths
 
 def carv2set_md5(img_name, module):
@@ -122,7 +112,7 @@ def diff_carvs(img1, img2, module):
 
 	pp.pprint(common_carvs_diff_md5)
 
-	if args.spec:
+	if args.more_carvs:
 
 		print("[+] ------ Carvs that are only in img1 or img2 ------")
 		img1_carvs = list(set(carv1).difference(set(carv_t)))
@@ -142,35 +132,59 @@ def diff_root_fs(img1, img2, module):
 	results = module.results
 	file_sum1, file_path1 = check_directory_files(img1, module)
 
+	dic1 = {file_path1[x]: file_sum1[x] for x in range(len(file_sum1))}
+
 	common_path_diff_md5 = []
 	print("[+] ------ Comparing root-file systems. ------")
 	print("[+] ------ Shared files with different md5sums. ------")
 
 	file_sum_t, file_path_t = check_directory_files(img2, module)
 
+	dic_t = {file_path_t[x]: file_sum_t[x] for x in range(len(file_sum_t))}
+
 	# Now we will get only the intersection of common files that have different hashes...
-	common_paths = set(file_path1).intersection(set(file_path_t))
-
-	for path in list(common_paths):
-
-		sum_index1 = file_path1.index(path)
-		sum_index2 = file_path_t.index(path)
+	for com_path in set(dic1).intersection(set(dic_t)):
 
 		# Checking if common files have the same md5 sum, if they don't append them to final list...
 		# Also filter out 'lib' files, they usually change due to updates!
-		if (file_sum1[sum_index1] not in file_sum_t[sum_index2]) and ('/lib/' not in path):
+		
+		if args.fsfilter == None:
+			filters = [""]
+		else:
+			filters = args.fsfilter
 
-			common_path_diff_md5.append([file_sum1[sum_index1], file_sum_t[sum_index2], path])
+		if (dic1[com_path] != dic_t[com_path]) and any(fil in com_path for fil in filters):
+
+			common_path_diff_md5.append([dic1[com_path], dic_t[com_path], com_path])
 
 	pp.pprint(common_path_diff_md5)
+
+	if args.more_files:
+
+		print("[+] ------ Files that are only in img1 or img2 ------")
+		img1_paths = list(set(file_path1).difference(set(file_path_t)))
+		img2_paths = list(set(file_path_t).difference(set(file_path1)))
+		diff_paths = []
+		for path in img1_paths:
+			diff_paths.append(['1', path])
+
+		for path in img2_paths:
+			diff_paths.append(['2', path])
+
+		pp.pprint(diff_paths)
+
+# Main program!!!
 
 
 parser = argparse.ArgumentParser(description='Place all the images you want to compare in the imgs folder! Then run the script!')
 parser.add_argument('--img', type=str, help="Specify image you would like to analyze against.")
-parser.add_argument('--verbose-carvs', dest='spec', action='store_true', help='Show uncommon carvs.')
+parser.add_argument('--more-carvs', dest='more_carvs', action='store_true', help='Show particular carvs.')
+parser.add_argument('--more-files', dest='more_files', action='store_true', help='Show particular files.')
 parser.add_argument('--clean-up', dest='wipe', action='store_true', help='Clean up extracted directories.')
+parser.add_argument('--rfs-filters', nargs='+', dest='fsfilter', help="Only output files whos paths match these strings.")
 parser.set_defaults(wipe=False)
-parser.set_defaults(spec=False)
+parser.set_defaults(more_carvs=False)
+parser.set_defaults(more_files=False)
 
 args = parser.parse_args()
 
@@ -191,7 +205,10 @@ elif os.path.isfile(args.img):
 
 	# We will just compare all the images with the given one.
 	for image in images:
-		combs.append((args.img, image))
+
+		# Don't compare an image with the same image!
+		if args.img not in image:
+			combs.append((args.img, image))
 
 	# Adding user supplied image to the list of images to be extracted.
 	images.append(args.img)
